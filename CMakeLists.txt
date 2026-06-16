@@ -20,7 +20,7 @@ include_directories(
 
 # ---- the only thing per-unit briefs touch: append the unit name here ----
 set(HABITAT_UGENS
-    # Tomograph
+    Tomograph
     # Colmatage
 )
 
