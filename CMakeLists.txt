@@ -36,4 +36,9 @@ foreach(ugen ${HABITAT_UGENS})
     endif()
     install(TARGETS ${ugen} DESTINATION ".")
     install(FILES "sc/${ugen}.sc" DESTINATION ".")
+    # optional per-unit help: installed only if HelpSource/Classes/<Name>.schelp exists
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/HelpSource/Classes/${ugen}.schelp")
+        install(FILES "HelpSource/Classes/${ugen}.schelp"
+                DESTINATION "HelpSource/Classes")
+    endif()
 endforeach()

@@ -1,0 +1,168 @@
+TITLE:: Tomograph
+summary:: 16-band parallel TPT state-variable filter bank
+categories:: UGens>Filters>Pitch
+related:: Classes/Klank, Classes/DynKlank, Classes/Resonz, Classes/BPF
+
+DESCRIPTION::
+
+A faithful native port of the ER-301 "Tomograph" (the code::Filterbank:: class
+in link::https://github.com/stolmine/er-301-habitat##stolmine/er-301-habitat::):
+a bank of 16 parallel link::https://en.wikipedia.org/wiki/Topology-preserving_transformation##TPT::
+(Zavalishin) state-variable filters summed into one output.
+
+Each band has its own frequency and gain. A single code::q:: macro sets a base
+resonance and a per-band Q "tilt" so lower-indexed bands ring harder than
+higher ones. A dry/wet code::mix:: and a code::tanh:: drive stage follow the
+bank.
+
+note::
+The bandpass tap peaks at 0 dB at its centre frequency for emphasis::any:: Q.
+Raising code::q:: does not make a band emphasis::louder:: — it emphasis::narrows::
+the band and emphasis::lengthens the decay::. You therefore only hear "ringing"
+when the bank is excited by transients (impulses, clicks, percussive material).
+Continuous noise re-excites every band each sample and masks the decay tail.
+::
+
+Band frequencies are usually distributed from a musical scale in sclang; see
+link::https://github.com/julianrubisch/habitat-ugens/blob/main/docs/scales.md##docs/scales.md::
+for loading Scala code::.scl:: files via the TuningLib quark and a ready-made
+SynthDef.
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+argument:: in
+The audio-rate signal to feed through the filter bank.
+
+argument:: f0
+Frequency of band 0, in Hz. Control rate, smoothed by code::slew::. Clamped to
+code::[20, 0.49 * sampleRate]::. (Bands are numbered 0–15; code::f1::…code::f15::
+follow with the same meaning and the same default.)
+
+argument:: g0
+Output gain of band 0 (linear). Set a band's gain to code::0:: to mute it. This
+is how unused bands are switched off when fewer than 16 are active.
+(code::g1::…code::g15:: follow.)
+
+argument:: q
+Macro resonance, code::0..1::. Maps to a base Q of code::1 + 99 * q.squared::
+(so code::q = 1:: → Q ≈ 100) and a per-band decay code::q*(2-q)*0.85 + 0.15::
+applied as code::qLoss.pow(bandIndex)::, so higher bands lose resonance as
+code::q:: drops below 1. At code::q = 1:: all bands share the base Q.
+
+argument:: mix
+Dry/wet, code::0..1::. code::0:: = input only, code::1:: = filtered only.
+strong::Default 1.::
+
+argument:: tanh
+code::tanh:: drive amount, code::0..1::. When code::> 0.001:: the post-mix signal
+is blended with code::tanh(signal * (1 + tanh*3)):: by this amount. strong::Default 0.::
+
+argument:: inLevel
+Input gain applied before the bank. strong::Default 1.::
+
+argument:: outLevel
+Output gain applied after the drive stage. strong::Default 1.::
+
+argument:: slew
+Band-frequency glide time in seconds. code::0:: = instant. Smooths changes to
+code::f0::…code::f15:: so retuning does not click. strong::Default 0.::
+
+argument:: nbands
+Active band count, code::2..16::. strong::Used only for level normalisation::
+(the wet sum is scaled by code::1 / nbands.sqrt::); it does emphasis::not:: mute
+bands. Mute bands by zeroing their gain. strong::Default 8.::
+
+argument:: ftype
+Filter type per band:
+list::
+## code::0:: – peak/bandpass (Q floor 0.5), tap = bandpass
+## code::1:: – lowpass (Q floor 5), tap = lowpass
+## code::2:: – resonator (Q floor 20), tap = bandpass — rings hardest
+::
+strong::Default 0.::
+
+returns:: A single-channel filtered signal (wrap in an array / multichannel
+expand for stereo).
+
+discussion::
+The C++ input enum order and this method's argument order are identical:
+code::in, f0..f15, g0..g15, q, mix, tanh, inLevel, outLevel, slew, nbands, ftype::.
+When splatting arrays, keep that order:
+code::
+Tomograph.ar(in, *(freqs ++ gains ++ [q, mix, tanh, inLevel, outLevel, slew, nbands, ftype]))
+::
+
+EXAMPLES::
+
+code::
+s.boot;
+
+// 8 active bands on a chord, the rest muted (gain 0)
+(
+~freqs = [110, 165, 220, 277, 330, 440, 554, 660, 0,0,0,0,0,0,0,0];
+~gains = ~freqs.collect { |f| (f > 0).asInteger };
+)
+::
+
+strong::1) Ping test:: sparse impulses, resonator mode, code::q = 1:: — each
+impulse rings out. This is where the resonance is audible.
+
+code::
+(
+~t = {
+    var ex = Dust.ar(3) * 0.8;                          // impulsive excitation
+    Tomograph.ar(ex, *(~freqs ++ ~gains
+        ++ [1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 8, 2])) ! 2;  // q=1, mix=1, ftype=2
+}.play;
+)
+~t.free;
+::
+
+strong::2) Q sweep:: an impulse train while code::q:: glides 0 → 1; the ring
+time grows audibly.
+
+code::
+(
+~t = {
+    var q  = LFTri.kr(0.1).range(0.0, 1.0);
+    var ex = Impulse.ar(2) * 0.8;
+    Tomograph.ar(ex, *(~freqs ++ ~gains
+        ++ [q, 1.0, 0.0, 1.0, 1.0, 0.0, 8, 2])) ! 2;
+}.play;
+)
+~t.free;
+::
+
+strong::3) Noise excitation:: for contrast — steady noise gives a narrowband /
+vocoder-like tone, emphasis::not:: ringing (the decay tail is masked).
+
+code::
+(
+~t = {
+    var ex = PinkNoise.ar(0.3) + Dust.ar(5);
+    Tomograph.ar(ex, *(~freqs ++ ~gains
+        ++ [0.9, 1.0, 0.0, 1.0, 1.0, 0.0, 8, 2])) ! 2;
+}.play;
+)
+~t.free;
+::
+
+strong::4) Lowpass bank with frequency glide:: code::ftype = 1::, retuning
+smoothed by code::slew::.
+
+code::
+(
+~t = {
+    var ex = Saw.ar(55) * 0.2;
+    var fs = ~freqs.collect { |f| if(f > 0) { f * LFNoise0.kr(0.5).range(0.5, 2.0) } { 0 } };
+    Tomograph.ar(ex, *(fs ++ ~gains
+        ++ [0.7, 1.0, 0.2, 1.0, 1.0, 0.08, 8, 1])) ! 2;  // slew 0.08 s, tanh 0.2
+}.play;
+)
+~t.free;
+::
+
+See link::https://github.com/julianrubisch/habitat-ugens/blob/main/docs/scales.md##docs/scales.md::
+for driving the band frequencies from a Scala scale and for a reusable SynthDef.
