@@ -1,0 +1,146 @@
+TITLE:: StationX
+summary:: Binary-file FIR filter (signed-8-bit codescan)
+categories:: UGens>Filters>Linear, UGens>Buffer
+related:: Classes/Convolution, Classes/BPF, Classes/BletchleyPark
+
+DESCRIPTION::
+
+A faithful native port of the ER-301 "StationX" (the code::CodescanFilter::
+class in link::https://github.com/stolmine/er-301-habitat##stolmine/er-301-habitat::):
+an FIR filter whose kernel emphasis::is:: a slice of the raw bytes of an
+arbitrary binary file, read as signed 8-bit samples (code::(signed char) b / 127::).
+
+At a given code::scan:: position, code::taps:: consecutive bytes are pulled from
+the file data, L1-normalized (so the coefficients sum to unit gain), and
+convolved with the input. Moving code::scan:: swaps in an entirely different
+kernel; code::taps:: sets the kernel length (4–64); code::mix:: crossfades dry
+against the filtered signal. The output is high-passed to remove DC.
+
+Because the "impulse response" is arbitrary file data, the result ranges from
+gentle coloration to comb/resonant/metallic filtering depending on where in the
+file you land.
+
+note::
+strong::The data must be loaded in sclang first.:: See
+link::Classes/BletchleyPark:: for the shared code::~loadCodescan:: helper — it
+reads a file's bytes into a mono link::Classes/Buffer:: of pre-normalized floats,
+which you pass as code::buf::. The buffer needs at least 64 frames.
+::
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+argument:: in
+The audio-rate signal to filter.
+
+argument:: buf
+Buffer number of the codescan data loaded by code::~loadCodescan::. Needs at
+least 64 frames or the input passes through unfiltered.
+
+argument:: scan
+Kernel position within the file data, code::0..1::. Clamped. Selects which
+consecutive run of bytes becomes the FIR kernel. strong::Default 0.::
+
+argument:: taps
+FIR kernel length in samples, clamped to code::[4, 64]:: (rounded). Longer
+kernels give a denser, more colored response. strong::Default 32.::
+
+argument:: mix
+Dry/wet, code::0..1::. code::0:: = input only, code::1:: = filtered only.
+strong::Default 0.5.::
+
+returns:: A single-channel filtered signal (wrap in an array for multichannel
+expansion).
+
+discussion::
+The C++ input enum order and this method's argument order are identical:
+code::in, buf, scan, taps, mix::.
+
+EXAMPLES::
+
+code::
+s.boot;
+
+// load once — any binary file works as the kernel source
+(
+~loadCodescan = { |path|
+    var f = File(path.standardizePath, "rb"), bytes, data;
+    if (f.isOpen.not) { ("Codescan: cannot open " ++ path).warn; nil } {
+        bytes = Int8Array.newClear(f.length);
+        f.read(bytes);
+        f.close;
+        data = bytes.as(Array).collect { |b| b / 127.0 };
+        Buffer.loadCollection(s, data);
+    }
+};
+~code = ~loadCodescan.("/bin/ls");
+)
+::
+
+strong::1) Plain filtering:: — pink noise through a fixed 32-tap file kernel,
+fully wet. You hear the file's coloration imposed on the noise.
+
+code::
+(
+~s = { StationX.ar(PinkNoise.ar(0.4), ~code, 0.3, 32, 1.0) ! 2 }.play;
+)
+~s.free;
+::
+
+strong::2) Scan sweep:: — link::Classes/MouseX:: selects the kernel position.
+Each spot in the file is a different filter.
+
+code::
+(
+~s = { StationX.ar(PinkNoise.ar(0.4), ~code, MouseX.kr(0, 1), 32, 0.9) ! 2 }.play;
+)
+~s.free;
+::
+
+strong::3) Taps sweep:: — link::Classes/MouseY:: sets the kernel length from 4
+to 64. Short = subtle tilt, long = dense comb/metallic character. A bright saw
+shows the effect clearly.
+
+code::
+(
+~s = {
+    var taps = MouseY.kr(4, 64).round;
+    StationX.ar(Saw.ar(80, 0.4), ~code, MouseX.kr(0, 1), taps, 1.0) ! 2;
+}.play;
+)
+~s.free;
+::
+
+strong::4) Dry/wet on a musical source:: — filter a chord and blend back the
+dry signal with code::mix::. link::Classes/MouseX:: scans the kernel, MouseY the
+wet amount.
+
+code::
+(
+~s = {
+    var src = Mix(Saw.ar([110, 165, 220] * 1.0, 0.15));
+    StationX.ar(src, ~code, MouseX.kr(0, 1), 48, MouseY.kr(0, 1)) ! 2;
+}.play;
+)
+~s.free;
+::
+
+strong::5) Modulated scan for movement:: — an LFO drifts the kernel position so
+the timbre never sits still; a second slow LFO breathes the tap count. Feed it
+an impulsive source to hear the response ring.
+
+code::
+(
+~s = {
+    var src = Decay2.ar(Impulse.ar(4), 0.001, 0.2) * WhiteNoise.ar(0.6);
+    var scan = LFNoise2.kr(0.3).range(0, 1);
+    var taps = LFTri.kr(0.07).range(8, 64).round;
+    var sig = StationX.ar(src, ~code, scan, taps, 0.85);
+    sig ! 2;
+}.play;
+)
+~s.free;
+
+~code.free;
+::

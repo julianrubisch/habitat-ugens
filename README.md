@@ -16,6 +16,8 @@ Please refer upstream for the canonical implementations and documentation.
 | Tomograph | Filterbank | 16-band TPT SVF bank, scale distribution |
 | Colmatage | Colmatage | BBCut/WarpCut, N. Collins → Livecut (R. Muller), GPLv2 |
 | Petrichor | MultitapDelay | Rainmaker-inspired stereo multitap granular delay |
+| BletchleyPark | CodescanOsc | Binary-file wavetable osc (signed-8-bit codescan) |
+| StationX | CodescanFilter | Binary-file FIR filter (signed-8-bit codescan) |
 
 > Each unit is built only when its name is uncommented in the `HABITAT_UGENS`
 > list in `CMakeLists.txt` and `src/<Name>.cpp` + `sc/<Name>.sc` both exist.

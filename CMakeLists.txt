@@ -23,6 +23,8 @@ set(HABITAT_UGENS
     Tomograph
     Colmatage
     Petrichor
+    BletchleyPark
+    StationX
 )
 
 foreach(ugen ${HABITAT_UGENS})

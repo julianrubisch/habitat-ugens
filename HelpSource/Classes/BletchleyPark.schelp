@@ -1,0 +1,180 @@
+TITLE:: BletchleyPark
+summary:: Binary-file wavetable oscillator (signed-8-bit codescan)
+categories:: UGens>Generators>Deterministic, UGens>Buffer
+related:: Classes/Osc, Classes/VOsc, Classes/Shaper, Classes/PlayBuf, Classes/StationX
+
+DESCRIPTION::
+
+A faithful native port of the ER-301 "BletchleyPark" (the code::CodescanOsc::
+class in link::https://github.com/stolmine/er-301-habitat##stolmine/er-301-habitat::):
+a wavetable oscillator whose table emphasis::is:: the raw bytes of an arbitrary
+binary file, read as signed 8-bit samples (code::(signed char) b / 127::).
+
+The oscillator scans a 256-sample window through a 4096-sample region of the
+file data. code::scan:: moves that window across the region, so sweeping it
+crossfades through wildly different waveshapes — the "sound" of the file.
+Phase is linearly interpolated across the window; a rising edge on code::sync::
+resets phase (hard sync); the output is high-passed to remove DC.
+
+note::
+strong::The data must be loaded in sclang first.:: Reading a file cannot happen
+on the audio thread, so a helper reads the bytes into a mono link::Classes/Buffer::
+of pre-normalized floats and you pass that buffer as code::buf:::
+
+code::
+~loadCodescan = { |path|
+    var f = File(path.standardizePath, "rb"), bytes, data;
+    if (f.isOpen.not) { ("Codescan: cannot open " ++ path).warn; nil } {
+        bytes = Int8Array.newClear(f.length);   // Int8Array is signed 8-bit
+        f.read(bytes);                           // fills the pre-sized raw array
+        f.close;
+        data = bytes.as(Array).collect { |b| b / 127.0 };  // -128..127 -> ~ -1..1
+        Buffer.loadCollection(s, data);
+    }
+};
+::
+The code::/127:: interpretation happens once, here; the UGen reads the buffer
+floats directly. For very large files, read a slice rather than the whole file.
+::
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+argument:: voct
+Audio-rate pitch control in "volts per octave". The hardware uses code::0.1::
+V/oct over a 10 Vpp range, so pitch is code::fundamental * 2 ** (voct * 10)::
+— i.e. code::voct = 0.1:: raises pitch one octave, code::voct = 0.2:: two, and
+so on. strong::Default 0.::
+
+argument:: sync
+Audio-rate hard-sync trigger. A rising edge crossing code::0.5:: resets the
+oscillator phase to code::0::. Feed code::0:: (or link::Classes/DC::) to disable.
+strong::Default 0.::
+
+argument:: buf
+Buffer number of the codescan data loaded by code::~loadCodescan:: (see the note
+above). Needs at least 256 frames or the UGen outputs silence.
+
+argument:: scan
+Window position within the scan region, code::0..1::. Clamped. Sweeping this is
+the primary timbral gesture. strong::Default 0.::
+
+argument:: fundamental
+Base frequency in Hz (before the code::voct:: multiplier). Clamped to
+code::[0.1, 0.49 * sampleRate]::. strong::Default 110.::
+
+argument:: regionStart
+Sample offset of the 4096-sample scan region within the buffer. The upstream
+unit randomizes this per instance at load; replicate that by passing
+code::rrand(0, (buf.numFrames - 4096 - 256).max(0)):: per voice. strong::Default 0.::
+
+returns:: A single-channel signal (wrap in an array for multichannel expansion).
+
+discussion::
+The C++ input enum order and this method's argument order are identical:
+code::voct, sync, buf, scan, fundamental, regionStart::.
+
+EXAMPLES::
+
+code::
+s.boot;
+
+// load once — any binary file works as source material
+(
+~loadCodescan = { |path|
+    var f = File(path.standardizePath, "rb"), bytes, data;
+    if (f.isOpen.not) { ("Codescan: cannot open " ++ path).warn; nil } {
+        bytes = Int8Array.newClear(f.length);
+        f.read(bytes);
+        f.close;
+        data = bytes.as(Array).collect { |b| b / 127.0 };
+        Buffer.loadCollection(s, data);
+    }
+};
+~code = ~loadCodescan.("/bin/ls");
+)
+::
+
+strong::1) Plain tone:: — a static window, fixed pitch. The timbre is whatever
+bytes the window lands on.
+
+warning::
+Many binaries have large zero-padded regions (headers, page alignment). A window
+that lands in one produces emphasis::silence::. In particular a macOS fat binary
+like code::/bin/ls:: (magic code::CA FE BA BE::) is mostly zero padding for its
+first ~18 kB, so code::regionStart = 0:: is dead. Point code::regionStart:: into
+the file's actual data — randomizing it per voice (as below) is the intended use.
+::
+
+code::
+(
+~b = {
+    var rs = rrand(0, (~code.numFrames - 4096 - 256).max(0));  // a real data region
+    BletchleyPark.ar(0, 0, ~code, 0.5, 110, rs) * 0.3 ! 2;
+}.play;
+)
+~b.free;
+::
+
+strong::2) Scan sweep:: — move link::Classes/MouseX:: to crossfade the window
+through the 4096-sample region. This is the core gesture.
+
+code::
+(
+~b = {
+    BletchleyPark.ar(0, 0, ~code, MouseX.kr(0, 1), 110, 0) * 0.3 ! 2;
+}.play;
+)
+~b.free;
+::
+
+strong::3) V/Oct pitch tracking:: — a slow saw over code::0..0.3:: sweeps three
+octaves (code::0.1:: per octave). Randomize code::regionStart:: per voice.
+
+code::
+(
+~b = {
+    var voct = LFSaw.kr(0.2).range(0, 0.3);
+    var rs = rrand(0, (~code.numFrames - 4096 - 256).max(0));
+    BletchleyPark.ar(voct, 0, ~code, 0.5, 110, rs) * 0.3 ! 2;
+}.play;
+)
+~b.free;
+::
+
+strong::4) Hard sync:: — an code::Impulse:: into code::sync:: resets phase,
+locking the tone to a sync rate independent of the wavetable. Sweep code::scan::
+under sync for classic sync-sweep timbres.
+
+code::
+(
+~b = {
+    var sync = Impulse.ar(MouseY.kr(50, 400, 1));   // sync frequency
+    BletchleyPark.ar(0, sync, ~code, MouseX.kr(0, 1), 110, 0) * 0.3 ! 2;
+}.play;
+)
+~b.free;
+::
+
+strong::5) Codescan choir:: — several detuned voices, each on its own random
+region, spread across the stereo field. A wash of file-derived timbre.
+
+code::
+(
+~b = {
+    var n = 6;
+    var voices = Array.fill(n, { |i|
+        var rs = rrand(0, (~code.numFrames - 4096 - 256).max(0));
+        var detune = LFNoise2.kr(0.2 + 0.1.rand).range(-0.01, 0.01);
+        var v = BletchleyPark.ar(detune, 0, ~code,
+            LFNoise2.kr(0.1).range(0, 1), 55, rs);
+        Pan2.ar(v, (i / (n - 1) * 2 - 1) * 0.8);
+    });
+    Mix(voices) * (0.3 / n.sqrt);
+}.play;
+)
+~b.free;
+
+~code.free;
+::
