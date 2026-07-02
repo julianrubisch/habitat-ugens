@@ -1,0 +1,216 @@
+TITLE:: Colmatage
+summary:: clock-driven breakbeat cutter (BBCut / WarpCut -> Livecut)
+categories:: UGens>Buffer, UGens>Granular
+related:: Classes/Tomograph, Classes/BufWr, Classes/PlayBuf, Classes/RecordBuf
+
+DESCRIPTION::
+
+A faithful native port of the ER-301 "Colmatage" (the code::Colmatage:: class in
+link::https://github.com/stolmine/er-301-habitat##stolmine/er-301-habitat::): a
+clock-synced breakbeat cutter. Algorithm lineage: Nick Collins' BBCut / WarpCut
+via link::https://github.com/RemyMuller/livecut##Livecut:: (Remy Muller), GPLv2.
+
+Colmatage continuously records its input into a circular buffer, then replays
+emphasis::slices:: of that recent audio in time with a clock. On every beat it
+decides — stochastically, governed by the parameters below — whether to let the
+audio through straight or to chop the current stretch into a emphasis::block::
+of repeated cuts: even stutters, accelerating rolls, ritardando tails, reversed
+grains. The result is classic breakbeat "cutting" applied to whatever you feed
+it (a drum loop, live input, a synth).
+
+How it is organised, from large to small:
+list::
+## a strong::phrase:: is a number of bars (code::phraseMin::..code::phraseMax::),
+## divided into strong::units:: by code::subdiv:: (units per bar),
+## consumed by strong::blocks:: (a run of consecutive units chosen at a time),
+## each block is rendered as one or more strong::cuts:: (slices of the buffer).
+::
+
+note::
+Unlike the language-side BBCut sketch, this is a single UGen: the recorder, the
+scheduler, and the slice playback all run inside it. Timing comes from a
+code::clock:: trigger (the period between pulses is measured in samples), not a
+bpm number, so it locks to whatever clock you give it. The internal record
+buffer is float (the hardware unit used 16-bit storage); audio is not quantised.
+::
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+argument:: in
+The audio signal to record and cut. This is the material the slices are taken
+from; there is no separate "play" input.
+
+argument:: clock
+A trigger. Each rising edge (a value crossing above 0) marks one beat, and the
+number of samples between successive pulses sets the tempo. Use an audio-rate
+trigger such as code::Impulse.ar(2):: (= 120 bpm). If you only have a control-
+rate clock, convert it with code::T2A:: / code::K2A::. With no clock connected
+the unit falls back to a default tempo.
+
+argument:: reset
+A trigger that restarts the phrase and block scheduler from the top. Pulse it at
+the start of a bar to keep the cutting aligned to your arrangement.
+
+argument:: density
+strong::0..1.:: Probability that a beat is cut rather than passed through
+straight. At code::0:: the input is essentially untouched; at code::1:: almost
+every block is sliced.
+
+argument:: blockSize
+strong::0..1.:: Bias for how long blocks tend to be. Low values favour short
+blocks (one unit), high values favour long blocks (up to the maximum). It shapes
+a weighted random choice, so it biases rather than fixes the length.
+
+argument:: blockMax
+strong::1..16.:: Upper limit on block length, in beats. Combined with
+code::subdiv:: this caps how many units a single block may span.
+
+argument:: repeatCount
+strong::2..64.:: Number of cuts a sliced (non-straight) block is divided into —
+i.e. how many repeats are packed into the block. Higher values give faster,
+busier rolls.
+
+argument:: ritardBias
+strong::0..1.:: For accelerating cut runs, the probability of reversing the run
+into a emphasis::ritardando:: (slowing down) instead. code::0:: = always
+accelerate, code::1:: = always ritard.
+
+argument:: blend
+strong::0..1.:: Chooses the cut shape within a block: low values lean toward
+strong::even:: equal-length repeats, high values toward strong::accel/ritard::
+runs whose cut lengths scale geometrically.
+
+argument:: accel
+strong::0.5..0.999.:: The geometric ratio for accel/ritard runs — how strongly
+successive cuts shrink (and so speed up). Lower values = a steeper accelerando;
+near code::1:: = nearly even.
+
+argument:: subdiv
+Units per bar, strong::snapped to one of {6, 8, 12, 16, 24, 32}::. Sets the
+basic rhythmic grid the cutter works on; larger values give finer slices.
+
+argument:: phraseMin
+Minimum phrase length in bars (rounded, >= 1). The phrase length is rechosen
+randomly between code::phraseMin:: and code::phraseMax:: each phrase.
+
+argument:: phraseMax
+Maximum phrase length in bars (>= code::phraseMin::).
+
+argument:: dutyCycle
+strong::-1..1.:: Magnitude = the fraction of each cut's slot that actually
+sounds (the rest is silence, giving gaps/gating). strong::Negative values play
+the slice in reverse.:: code::1:: = full-length forward slices.
+
+argument:: ampMin
+strong::0..1.:: Lower bound of the random per-cut amplitude. Each block picks a
+start and end amplitude in code::[ampMin, ampMax]:: and ramps between them.
+
+argument:: ampMax
+strong::ampMin..1.:: Upper bound of the random per-cut amplitude.
+
+argument:: fade
+Window fade time in seconds (clamped to 1 sample .. 0.1 s). Each cut gets an
+exponential attack/decay window this long at each end to avoid clicks.
+
+argument:: mix
+strong::0..1.:: Dry/wet. code::0:: = input only, code::1:: = cut output only.
+
+argument:: inLevel
+strong::0..4.:: Input gain applied before recording and the dry path.
+
+argument:: outLevel
+strong::0..4.:: Output gain applied after the drive stage.
+
+argument:: tanh
+strong::0..1.:: Amount of code::fast_tanh:: saturation on the mixed signal
+(drive increases with the amount). code::0:: = clean.
+
+argument:: bufnum
+Record buffer selector. strong::-1 (default):: = the UGen allocates and owns an
+internal mono buffer of code::maxdur:: seconds. strong::>= 0:: = use that
+external mono link::Classes/Buffer:: instead (you allocate it). An external
+buffer that is not yet ready, or not mono, produces silence until valid.
+
+argument:: maxdur
+Length in seconds of the internal record buffer. Only used when
+code::bufnum < 0::. strong::Default 8.:: Allocated once at instantiation.
+
+returns:: A single-channel signal. Wrap with code::! 2:: or multichannel-expand
+for stereo.
+
+discussion::
+The C++ input enum order and this method's argument order are identical. When
+splatting arrays, keep that order.
+
+EXAMPLES::
+
+strong::1) Basic cutting (internal buffer).:: A synthesized 4/4 drum loop is fed
+in as the source. code::Impulse.ar(2):: is the clock (120 bpm). With
+code::density:: around 0.6 you hear a mix of straight beats and cut blocks. The
+code::.set:: lines after it each isolate one parameter — evaluate them one at a
+time and listen for the described change.
+
+code::
+s.boot;
+(
+SynthDef(\colmDemo, { |density = 0.6, repeatCount = 4, blend = 0.5, accel = 0.9,
+    ritardBias = 0.5, dutyCycle = 1, sub = 8, mix = 1, tanh = 0|
+    var beat  = Impulse.ar(2);
+    var kick  = SinOsc.ar(55) * EnvGen.ar(Env.perc(0.001, 0.18), beat);
+    var hat   = HPF.ar(WhiteNoise.ar, 8000) * EnvGen.ar(Env.perc(0.001, 0.03), Impulse.ar(8)) * 0.4;
+    var snare = (PinkNoise.ar + SinOsc.ar(190)) * EnvGen.ar(Env.perc(0.001, 0.12), Impulse.ar(2, 0.5)) * 0.5;
+    var src   = (kick + hat + snare) * 0.7;
+    Out.ar(0, Colmatage.ar(src, beat, 0,
+        density: density, repeatCount: repeatCount, ritardBias: ritardBias,
+        blend: blend, accel: accel, subdiv: sub, dutyCycle: dutyCycle,
+        mix: mix, tanh: tanh) ! 2);
+}).add;
+)
+x = Synth(\colmDemo);
+
+x.set(\density, 0.95);                  // almost always cutting
+x.set(\repeatCount, 8, \blend, 0.1);    // longer rolls, accel/ritard shapes
+x.set(\accel, 0.7);                     // steeper accelerando inside a roll
+x.set(\ritardBias, 0.9);                // often flip the roll into a ritardando
+x.set(\dutyCycle, -0.6);                // reverse slices, 60% duty (gaps appear)
+x.set(\sub, 16);                        // finer grid => smaller, faster cuts
+x.set(\tanh, 0.5, \mix, 0.85);          // saturation + a touch of dry
+x.set(\density, 0.0);                   // back to dry passthrough
+x.free;
+::
+
+strong::2) Live input via an external buffer.:: Pass your own mono
+link::Classes/Buffer:: with code::bufnum:: instead of using the internal one,
+and feed code::SoundIn:: so the cutter works on live audio from input 0
+(mic / interface). Everything else behaves as in example 1.
+
+code::
+(
+b = Buffer.alloc(s, 8 * s.sampleRate, 1);   // 8 s mono record buffer
+SynthDef(\colmLive, { |bufnum|
+    Out.ar(0, Colmatage.ar(SoundIn.ar(0), Impulse.ar(2), 0,
+        density: 0.7, repeatCount: 6, bufnum: bufnum) ! 2);
+}).add;
+)
+y = Synth(\colmLive, [\bufnum, b]);
+y.free; b.free;
+::
+
+strong::3) Reset.:: The code::reset:: trigger restarts the scheduler at the top
+of a phrase. Here a slow code::Impulse.ar(0.25):: resets every 4 seconds, which
+re-locks the cutting to a predictable boundary while a fast clock drives dense
+16th-note rolls.
+
+code::
+(
+z = {
+    var beat = Impulse.ar(4);
+    var src  = Saw.ar(110) * LFPulse.ar(4, 0, 0.3) * 0.3;
+    Colmatage.ar(src, beat, Impulse.ar(0.25),
+        density: 0.9, blockMax: 4, subdiv: 16, repeatCount: 8) ! 2;
+}.play;
+)
+z.free;
+::
