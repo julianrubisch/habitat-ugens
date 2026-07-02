@@ -1,0 +1,195 @@
+TITLE:: Petrichor
+summary:: Rainmaker-inspired stereo multitap granular delay
+categories:: UGens>Delays
+related:: Classes/Tomograph, Classes/Colmatage, Classes/CombC, Classes/PitchShift
+
+DESCRIPTION::
+
+A faithful native port of the ER-301 "Petrichor" (the code::MultitapDelay::
+class in link::https://github.com/stolmine/er-301-habitat##stolmine/er-301-habitat::):
+a Rainmaker-inspired stereo multitap delay with up to 8 taps.
+
+Each tap has its own TPT (Zavalishin) state-variable filter
+(Off/LP/BP/HP/Notch), level, equal-power pan, and a 3-grain granular pitch
+shifter that also does granular reverse. Tap delay times are emphasis::derived::
+from a distribution: code::masterTime:: scaled by code::tapCount::, code::skew::,
+code::stack::, and code::grid::, with a slow per-tap sinusoidal code::drift::.
+A multi-tap weighted-sum feedback network (code::feedback:: × code::1/sqrt(activeTaps)::
+× per-tap Q-compensation) runs through a tone filter and a soft limiter. The
+output passes through dry/wet mix, an optional code::tanh:: drive, and an
+always-on output limiter.
+
+note::
+This port uses a emphasis::float:: delay buffer (the hardware unit used a
+quantized int16 buffer to save memory). The buffer is allocated once at
+instantiation from code::maxDelayTime::, so changing code::maxDelayTime:: on a
+running synth has emphasis::no effect:: — it is read only by the constructor.
+A large buffer needs server memory: roughly code::4 * maxDelayTime:: MB. If
+allocation fails the UGen outputs silence; raise code::s.options.memSize::
+(e.g. code::s.options.memSize = 8192 * 64;:: before booting).
+::
+
+The original "Xform" parameter randomizer is emphasis::not:: part of the UGen;
+it is a control-domain feature, so it lives host-side in sclang. See the
+example file for a routine that randomizes the macro inputs on a trigger.
+
+CLASSMETHODS::
+
+METHOD:: ar
+
+argument:: in
+The audio-rate input signal.
+
+argument:: masterTime
+Master delay time in seconds, the base of the tap distribution. Clamped to
+code::[0.001, maxDelayTime]::. strong::Default 0.5.::
+
+argument:: feedback
+Feedback amount, code::0..0.95::. Distributed across the active taps as a
+weighted sum. strong::Default 0.3.::
+
+argument:: feedbackTone
+Tone of the feedback path, code::-1..1::. code::-1:: = dark (lowpass),
+code::0:: = flat, code::+1:: = bright (highpass). strong::Default 0.::
+
+argument:: mix
+Dry/wet, code::0..1::. code::0:: = input only, code::1:: = wet only.
+strong::Default 0.5.::
+
+argument:: tapCount
+Number of active taps, code::1..8::. strong::Default 4.::
+
+argument:: voctPitch
+Master pitch offset applied to every grain-shifted tap, in the ER-301 V/Oct
+convention (multiplied by 10 to give octaves). strong::Default 0.::
+
+argument:: skew
+Distribution skew exponent. The per-group position is raised to
+code::2.pow(skew)::, bunching taps toward the start (negative) or end
+(positive) of the window. strong::Default 0.::
+
+argument:: grainSize
+Granular grain size, code::0..1::, mapped to roughly code::5..300:: ms.
+strong::Default 0.5.::
+
+argument:: drift
+Per-tap time drift, code::0..1::. Adds a slow sinusoidal wander to each tap's
+delay time. strong::Default 0.::
+
+argument:: reverse
+Probability, code::0..1::, that a newly spawned grain plays backward.
+strong::Default 0.::
+
+argument:: stack
+Group stacking, code::0..3::, mapped to code::1, 2, 4, 8::. Taps are grouped in
+runs of this size before stepping to the next delay position. strong::Default 0.::
+
+argument:: grid
+Time grid divisor, code::0..4::, mapped to code::1, 2, 4, 8, 16::. Higher values
+pack the taps more tightly. strong::Default 0.::
+
+argument:: inLevel
+Input gain applied before the buffer write, code::0..4::. strong::Default 1.::
+
+argument:: outLevel
+Output gain applied before the limiter, code::0..4::. strong::Default 1.::
+
+argument:: tanh
+User saturation amount, code::0..1::. When code::> 0.001:: the post-mix signal
+is blended with code::tanh(signal * (1 + tanh*3)):: by this amount.
+strong::Default 0.::
+
+argument:: mono
+If code::> 0.5::, the two channels are summed and the same mono signal is sent
+to both outputs. strong::Default 0.::
+
+argument:: maxDelayTime
+Maximum delay time in seconds. strong::Read once at construction:: to size the
+delay buffer; changing it later has no effect. strong::Default 8.::
+
+argument:: tapLevel
+An array of 8 per-tap output levels, code::0..1::. strong::Default:: code::#[1,1,1,1,1,1,1,1]::.
+
+argument:: tapPan
+An array of 8 per-tap pan positions, code::-1..1:: (left..right).
+strong::Default:: code::#[0,0,0,0,0,0,0,0]::.
+
+argument:: tapPitch
+An array of 8 per-tap pitch offsets in semitones, code::-24..24:: (used as
+code::/12:: octaves, summed with code::voctPitch::). A nonzero value switches
+that tap into granular mode. strong::Default:: code::#[0,0,0,0,0,0,0,0]::.
+
+argument:: filterCutoff
+An array of 8 per-tap filter cutoffs in Hz, code::20..10000::.
+strong::Default:: code::#[10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]::.
+
+argument:: filterQ
+An array of 8 per-tap filter resonances, code::0..1:: (maps to Q code::1..30::).
+strong::Default:: code::#[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]::.
+
+argument:: filterType
+An array of 8 per-tap filter types:
+list::
+## code::0:: – Off (tap passes unfiltered)
+## code::1:: – Lowpass
+## code::2:: – Bandpass
+## code::3:: – Highpass
+## code::4:: – Notch
+::
+strong::Default:: code::#[0,0,0,0,0,0,0,0]::.
+
+returns:: An array of two channels, code::[L, R]::.
+
+discussion::
+The C++ input enum order and this method's argument order are identical: the
+17 macro arguments and code::maxDelayTime::, then the six per-tap arrays in the
+order code::tapLevel, tapPan, tapPitch, filterCutoff, filterQ, filterType::,
+each splatted to 8 inputs. That is 66 inputs and 2 outputs in total.
+
+EXAMPLES::
+
+code::
+s.boot;
+// large float buffers need server memory; set before booting:
+// s.options.memSize = 8192 * 64; s.reboot;
+::
+
+strong::1) Live input through a granular multitap:: pitched and reversed taps,
+per-tap filtering.
+
+code::
+(
+~p = {
+    var src = SoundIn.ar(0);
+    Petrichor.ar(src,
+        masterTime: 0.4, feedback: 0.55, feedbackTone: -0.3, mix: 0.6,
+        tapCount: 6, grainSize: 0.5, drift: 0.3, reverse: 0.2,
+        stack: 1, grid: 2, maxDelayTime: 8,
+        tapPitch: #[0, 7, 0, 12, -5, 0, 0, 0],
+        filterType: #[1, 0, 2, 0, 1, 0, 0, 0],
+        filterCutoff: #[2000, 8000, 1200, 8000, 600, 8000, 8000, 8000]);
+}.play;
+)
+~p.free;
+::
+
+strong::2) Rhythmic taps from an impulse:: code::grid:: and code::stack:: change
+the spacing; raise code::feedback:: for a long tail.
+
+code::
+(
+~p = {
+    var src = Decay2.ar(Impulse.ar(1), 0.001, 0.1) * PinkNoise.ar(0.6);
+    Petrichor.ar(src,
+        masterTime: 0.5, feedback: 0.7, mix: 0.7,
+        tapCount: 8, skew: 0.5, stack: 0, grid: 3, maxDelayTime: 8,
+        tapPan: #[-1, -0.6, -0.2, 0.2, 0.6, 1, 0, 0]);
+}.play;
+)
+~p.free;
+::
+
+See the example file
+link::https://github.com/julianrubisch/habitat-ugens/blob/main/examples/petrichor-test.scd##examples/petrichor-test.scd::
+for a host-side "Xform" routine that randomizes the macro parameters on a
+trigger (the control-domain feature dropped from the UGen).

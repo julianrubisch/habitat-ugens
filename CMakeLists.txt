@@ -22,6 +22,7 @@ include_directories(
 set(HABITAT_UGENS
     Tomograph
     Colmatage
+    Petrichor
 )
 
 foreach(ugen ${HABITAT_UGENS})
