@@ -84,6 +84,15 @@ Tomograph.asClass.notNil;   // -> true, and a clean boot with no "UGen not insta
 The `.cpp` input enum order and the `.sc` `multiNew` argument order must be
 identical.
 
+### Porting directive
+
+Port each unit's **C++ source faithfully as a native UGen** — transcribe the DSP
+from the unit's `.cpp`/`.h`. Do **not** re-implement as an sclang SynthDef or
+approximate with stock UGens. The only work that may move to sclang is what
+cannot run on the audio thread (e.g. reading a binary file); that data is loaded
+into a `Buffer` and passed into the UGen. Everything else is the transcribed
+per-sample DSP.
+
 ## Scales (Scala `.scl`)
 
 Tomograph distributes its band frequencies from a musical scale loaded from a
